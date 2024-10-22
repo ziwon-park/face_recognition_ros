@@ -1,6 +1,7 @@
 ### Face recognition with ROS
 
 > Face recognition package for ROS
+
 > Find known faces and its location
 
 ### 다른 폴더를 사용할 경우

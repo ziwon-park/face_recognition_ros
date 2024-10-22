@@ -92,8 +92,11 @@ class FaceRecognition:
         self.integral_y = 0
         
         # Face tracking
-        self.face_tracker = cv2.TrackerKCF_create()
+        self.face_tracker = cv2.TrackerCSRT_create()
         self.tracking_face = False
+        self.detection_interval = 30 # 30 프레임마다 detection 수행
+        self.frame_count = 0
+        self.tracking_confidence_threshold = 0.5 # tracking 신뢰도 임계값
         
         # resource usage monitoring
         self.resource_monitor = ResourceMonitor()
@@ -155,20 +158,64 @@ class FaceRecognition:
         target_face_found = False
         is_match = False
         
+        # 현재 tracking 상태 확인
+        tracking_success = False
+        
         if self.tracking_face:
             success, box = self.face_tracker.update(resized_image)
             if success:
                 (x, y, w, h) = [int(v) for v in box]
-                cv2.rectangle(resized_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                face_center_x = x + w // 2
-                face_center_y = y + h // 2
-                target_face_found = True
+                
+                if self.frame_count % self.detection_interval == 0:
+                    face_locations = self.face_model.detect_faces(resized_image)
+                    min_iou_score = 0
+                    best_match_box = None
+                    for face_location in face_locations:
+                        if isinstance(face_location, dict):
+                            dx, dy, dw, dh = face_location['x'], face_location['y'], face_location['w'], face_location['h']
+                        elif len(face_location) == 4:
+                            top, right, bottom, left = face_location
+                            dy, dx, dh, dw = top, left, bottom - top, right - left
+                        else:
+                            dx, dy, dw, dh = map(int, face_location)
+
+                        intersection_x = max(x, dx)
+                        intersection_y = max(y, dy)
+                        intersection_w = min(x + w, dx + dw) - intersection_x
+                        intersection_h = min(y + h, dy + dh) - intersection_y
+
+                        if intersection_w > 0 and intersection_h > 0:
+                            intersection_area = intersection_w * intersection_h
+                            union_area = w * h + dw * dh - intersection_area
+                            iou_score = intersection_area / union_area
+
+                            if iou_score > min_iou_score:
+                                min_iou_score = iou_score
+                                best_match_box = (dx, dy, dw, dh)
+
+                    if min_iou_score > self.tracking_confidence_threshold:
+                        if best_match_box:
+                            x, y, w, h = best_match_box
+                            self.face_tracker = cv2.TrackerKCF_create()
+                            self.face_tracker.init(resized_image, (x, y, w, h))
+                            tracking_success = True
+                    else:
+                        self.tracking_face = False
+                else:
+                    tracking_success = True
+                    
+                if tracking_success:
+                    cv2.rectangle(resized_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    face_center_x = x + w // 2
+                    face_center_y = y + h // 2
+                    target_face_found = True
                 
             else:
                 self.tracking_face = False
         
-        if not self.tracking_face:
+        if not self.tracking_face or self.frame_count % self.detection_interval == 0:          
             face_locations = self.face_model.detect_faces(resized_image)
+
             for face_location in face_locations:
                 if isinstance(face_location, dict):  # DeepFace format
                     x, y, w, h = face_location['x'], face_location['y'], face_location['w'], face_location['h']
@@ -206,6 +253,8 @@ class FaceRecognition:
                     self.face_tracker.init(resized_image, (x, y, w, h))
                     self.tracking_face = True
                     break
+                
+        self.frame_count += 1
         
         if target_face_found:
             cv2.line(resized_image, (self.image_center_x, self.image_center_y), 
