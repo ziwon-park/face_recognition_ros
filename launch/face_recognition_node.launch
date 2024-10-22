@@ -1,0 +1,7 @@
+<launch>
+    <arg name="target_face_folder" default="/home/nuc/ros/face_ws/src/face_recognition/face/Myung"/>
+    
+    <node name="face_recognition_node" pkg="face_recognition_pkg" type="face_recognition_node.py" output="screen">
+        <param name="target_face_folder" value="$(arg target_face_folder)"/>
+    </node>
+</launch>
