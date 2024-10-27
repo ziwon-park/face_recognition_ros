@@ -3,7 +3,11 @@
 import rospy
 import cv2
 import numpy as np
+
 from sensor_msgs.msg import Image, CameraInfo
+from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Float32MultiArray, MultiArrayDimension
+
 from cv_bridge import CvBridge
 from visualization_msgs.msg import Marker
 from tf.transformations import quaternion_from_euler, rotation_matrix, concatenate_matrices, euler_from_matrix
@@ -14,16 +18,40 @@ class ObjectTracker:
         
         self.bridge = CvBridge()
         
-        self.camera_matrix = None
-        self.image_width = None
-        self.image_height = None
-        self.got_camera_info = False
+        try: 
+            # Camera parameters
+            self.fx = rospy.get_param('camera_face/fx')
+            self.fy = rospy.get_param('camera_face/fy')
+            self.cx = rospy.get_param('camera_face/cx')
+            self.cy = rospy.get_param('camera_face/cy')
+            self.image_width = rospy.get_param('camera_face/width')
+            self.image_height = rospy.get_param('camera_face/height')    
+                
+            # Transform parameters
+            self.trans_x = rospy.get_param('camera_face/trans_x', 0.2785)  
+            self.trans_y = rospy.get_param('camera_face/trans_y', 0.0125)
+            self.trans_z = rospy.get_param('camera_face/trans_z', 0.0167)    
+
+            self.got_camera_info = True
+            
+        except KeyError as e:
+            rospy.logerr(f"Failed to get parameters: {e}")
+            self.got_camera_info = False
+
+        # self.camera_matrix = None
+        # self.image_width = None
+        # self.image_height = None
+        # self.got_camera_info = False
         
-        self.marker_pub = rospy.Publisher('/detected_object', Marker, queue_size=10)        
-        self.camera_info_sub = rospy.Subscriber('/camera_face/color/camera_info', 
-                                              CameraInfo, 
-                                              self.camera_info_callback)
-        self.image_sub = None
+        self.marker_pub = rospy.Publisher('/detected_object', Marker, queue_size=10)   
+        self.pose_pub = rospy.Publisher('/detected_object_pose', PoseStamped, queue_size=10)
+        self.bbox_pub = rospy.Publisher('/detected_object_bbox', Float32MultiArray, queue_size=10)
+             
+        if self.got_camera_info:
+            self.image_sub = rospy.Subscriber('/camera_face/color/image_raw', 
+                                            Image, 
+                                            self.image_callback)
+        # self.image_sub = None
         
         self.lower_green = np.array([40, 40, 40])
         self.upper_green = np.array([80, 255, 255])
@@ -57,7 +85,7 @@ class ObjectTracker:
         
         # translation
         trans_mat = np.eye(4)
-        trans_mat[0:3, 3] = [0.2785, 0.0125, 0.0167]
+        trans_mat[0:3, 3] = [self.trans_x, self.trans_y, self.trans_z]
         
         self.transform_mat = np.matmul(trans_mat, rot_mat)
         self.inv_transform_mat = np.linalg.inv(self.transform_mat)
@@ -106,6 +134,8 @@ class ObjectTracker:
                 largest_contour = max(contours, key=cv2.contourArea)
                 x, y, w, h = cv2.boundingRect(largest_contour)
                 
+                self.publish_bbox(x, y, w, h)
+                
                 center_x = x + w/2
                 center_y = y + h/2
                 
@@ -122,6 +152,14 @@ class ObjectTracker:
                 
                 point_trunk = self.transform_point(point_camera)
                 
+                dx = point_trunk[0]
+                dy = point_trunk[1]
+                dz = point_trunk[2]
+                
+                yaw = -np.arctan2(dy, dx)
+                pitch = np.arctan2(dz, np.sqrt(dx*dx + dy*dy))
+                                
+                self.publish_pose(point_trunk, yaw, pitch)
                 self.publish_marker(point_trunk)
                 
                 cv2.rectangle(cv_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
@@ -169,6 +207,36 @@ class ObjectTracker:
         marker.color.a = 1.0
         
         self.marker_pub.publish(marker)
+        
+    def publish_bbox(self, x, y, w, h):
+        bbox_msg = Float32MultiArray()
+        
+        bbox_msg.layout.dim = [MultiArrayDimension()]
+        bbox_msg.layout.dim[0].label = "bbox"
+        bbox_msg.layout.dim[0].size = 4
+        bbox_msg.layout.dim[0].stride = 4
+        
+        bbox_msg.data = [float(x), float(y), float(w), float(h)]
+        
+        self.bbox_pub.publish(bbox_msg)
+        
+    def publish_pose(self, point_trunk, yaw, pitch):
+        pose_msg = PoseStamped()
+        pose_msg.header.frame_id = "trunk"
+        pose_msg.header.stamp = rospy.Time.now()
+        
+        pose_msg.pose.position.x = point_trunk[0]
+        pose_msg.pose.position.y = point_trunk[1]
+        pose_msg.pose.position.z = point_trunk[2]
+        
+        q = quaternion_from_euler(0, pitch, yaw - np.pi/2)
+        pose_msg.pose.orientation.x = q[0]
+        pose_msg.pose.orientation.y = q[1]
+        pose_msg.pose.orientation.z = q[2]
+        pose_msg.pose.orientation.w = q[3]
+        
+        self.pose_pub.publish(pose_msg)
+
 
 if __name__ == '__main__':
     try:

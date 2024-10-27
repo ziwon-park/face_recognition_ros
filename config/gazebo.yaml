@@ -1,0 +1,13 @@
+camera_face:
+  # Camera intrinsic parameters
+  fx: 268.0127571872258
+  fy: 268.0127571872258
+  cx: 0.0045
+  cy: 0.0039
+  width: 928
+  height: 800
+  
+  # Transform parameters
+  trans_x: 0.2785
+  trans_y: 0.0125
+  trans_z: 0.0167
