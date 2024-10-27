@@ -1,6 +1,21 @@
 <launch>
     <rosparam command="load" file="$(find gazebo_recognition)/config/gazebo.yaml" />
-
-    <node name="gazebo_recognition_node" pkg="gazebo_recognition" type="gazebo_recognition_node.py" output="screen">
+    
+    <arg name="face_detection" default="false"/>
+    
+    <!-- Face recognition node (if face_detection is true) -->
+    <node if="$(arg face_detection)" 
+          pkg="face_recognition_pkg" 
+          type="face_recognition_node.py" 
+          name="face_recognition_node" 
+          output="screen">
+        <param name="target_face_folder" value="/home/nuc/ros/face_ws/src/face_recognition/face/Myung"/>
+    </node>
+    
+    <node pkg="gazebo_recognition" 
+          type="gazebo_recognition_node.py" 
+          name="gazebo_recognition_node" 
+          output="screen">
+        <param name="face_detection" value="$(arg face_detection)"/>
     </node>
 </launch>

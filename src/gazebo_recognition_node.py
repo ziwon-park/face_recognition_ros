@@ -16,6 +16,7 @@ class ObjectTracker:
     def __init__(self):
         rospy.init_node('gazebo_recognition_node')
         
+        self.use_face_detection = rospy.get_param('~face_detection', False)
         self.bridge = CvBridge()
         
         try: 
@@ -47,10 +48,20 @@ class ObjectTracker:
         self.pose_pub = rospy.Publisher('/detected_object_pose', PoseStamped, queue_size=10)
         self.bbox_pub = rospy.Publisher('/detected_object_bbox', Float32MultiArray, queue_size=10)
              
-        if self.got_camera_info:
-            self.image_sub = rospy.Subscriber('/camera_face/color/image_raw', 
-                                            Image, 
-                                            self.image_callback)
+        # Subscribers based on detection mode
+        if self.use_face_detection:
+            rospy.loginfo("Using real camera")
+            self.bbox_sub = rospy.Subscriber('/face_bbox', Float32MultiArray, self.bbox_callback)
+        else:
+            rospy.loginfo("Using gazebo camera")
+            if self.got_camera_info:
+                self.image_sub = rospy.Subscriber('/camera_face/color/image_raw', 
+                                                Image, 
+                                                self.image_callback)
+        # if self.got_camera_info:
+        #     self.image_sub = rospy.Subscriber('/camera_face/color/image_raw', 
+        #                                     Image, 
+        #                                     self.image_callback)
         # self.image_sub = None
         
         self.lower_green = np.array([40, 40, 40])
@@ -114,6 +125,44 @@ class ObjectTracker:
                                             self.image_callback)
             
             self.camera_info_sub.unregister()
+                
+                
+    def bbox_callback(self, msg):
+        if not self.got_camera_info:
+            return
+            
+        try:
+            x, y, w, h = msg.data
+            
+            center_x = x + w/2
+            center_y = y + h/2
+            
+            cam_x = (center_x - self.image_width/2) / self.fx
+            cam_y = (center_y - self.image_height/2) / self.fy
+            
+            depth = 1.0
+
+            point_camera = [
+                depth,    
+                cam_x * depth, 
+                cam_y * depth  
+            ]
+            
+            point_trunk = self.transform_point(point_camera)
+            
+            dx = point_trunk[0]
+            dy = point_trunk[1]
+            dz = point_trunk[2]
+            
+            yaw = np.arctan2(dy, dx)  
+            pitch = np.arctan2(dz, np.sqrt(dx*dx + dy*dy))
+                            
+            self.publish_pose(point_trunk, yaw, pitch)
+            self.publish_marker(point_trunk)
+            self.publish_bbox(x, y, w, h)
+            
+        except Exception as e:
+            rospy.logerr(f"Error processing bbox: {str(e)}")
 
     def image_callback(self, msg):
         if not self.got_camera_info:

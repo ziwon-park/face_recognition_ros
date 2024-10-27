@@ -3,7 +3,11 @@
 ### 실행 방법
 
 ```
-$ roslaunch gazebo_recognition gazebo_recognition_node.launch
+# realsense face detection 모듈 이용할 경우
+roslaunch your_package_name gazebo_recognition_node.launch face_detection:=true
+
+# gazebo 카메라 이용할 경우
+roslaunch your_package_name gazebo_recognition_node.launch face_detection:=false
 ```
 
 - 카메라 변경할 경우
@@ -13,7 +17,7 @@ $ roslaunch gazebo_recognition gazebo_recognition_node.launch
 <rosparam command="load" file="$(find gazebo_recognition)/config/gazebo.yaml" />
 ```
 
-여기 yaml 파일을 바꿔서 카메라 파라미터와 tf 정보를 수정할 수 있다. (하단 '카메라가 변경될 경우' 참조)
+여기 yaml 파일을 바꿔서 카메라 파라미터와 tf 정보를 수정할 수 있다. 
 
 ### Details
 
@@ -71,28 +75,4 @@ pose:
     w: 0.9995747231615942
 ---
 ```
-
-### 카메라가 변경될 경우
-
-현재 gazebo 카메라가 상하좌우 반전되어 들어오고 있어서, 다음과 같은 부분들이 그에 맞게 수정되어 있다. 
-
-```
-# 현재 코드 (반전된 이미지용)
-
-cam_x = -((center_x - self.image_width/2) / self.fx)   
-cam_y = -((center_y - self.image_height/2) / self.fy) 
-
-point_camera = [
-    depth,
-    -cam_x * depth,  
-    -cam_y * depth  
-]
-
-yaw = -np.arctan2(dy, dx)
-```
-
-따라서 정상적인 카메라를 사용할 경우 cv2.flip 부분을 제거하고 마이너스 부호를 없애 줘야 한다. 
-
-### 아직 미완인 부분
-
-- gazebo 상 이미지가 아니라 realsense로 얼굴 인식한 결과 받아서 pitch, yaw 생성하는 부분
+ 
