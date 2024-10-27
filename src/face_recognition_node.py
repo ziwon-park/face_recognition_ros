@@ -64,6 +64,8 @@ class FaceRecognition:
         self.bridge = CvBridge()
         self.image_sub = rospy.Subscriber('/go1_d435/color/image_raw', Image, self.image_callback, queue_size=1)
         self.face_pub = rospy.Publisher('/face', Image, queue_size=10)
+        self.bbox_pub = rospy.Publisher('/face_bbox', Float32MultiArray, queue_size=10)
+
 
         self.face_model = get_face_model(model_name)
         
@@ -128,6 +130,22 @@ class FaceRecognition:
             fps = len(self.frame_times) / time_diff
             return fps
         return 0
+        
+    def publish_bbox(self, x, y, w, h):
+        bbox_msg = Float32MultiArray()
+        bbox_msg.layout.dim = [MultiArrayDimension()]
+        bbox_msg.layout.dim[0].label = "bbox"
+        bbox_msg.layout.dim[0].size = 4
+        bbox_msg.layout.dim[0].stride = 4
+        
+        # 원래 사이즈로 되돌리기
+        x_orig = x / self.scale_factor
+        y_orig = y / self.scale_factor
+        w_orig = w / self.scale_factor
+        h_orig = h / self.scale_factor
+        
+        bbox_msg.data = [float(x_orig), float(y_orig), float(w_orig), float(h_orig)]
+        self.bbox_pub.publish(bbox_msg)
 
     def image_callback(self, data): 
         # os.system("clear")
@@ -221,6 +239,7 @@ class FaceRecognition:
                         (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             roll, pitch = self.calculate_robot_control(face_center_x / self.scale_factor, face_center_y / self.scale_factor)
             rospy.loginfo(f"Target person found. Roll: {roll:.4f}, Pitch: {pitch:.4f}")
+            self.publish_bbox(x, y, w, h)
         else:
             rospy.loginfo("Target person not found in the image")
 
