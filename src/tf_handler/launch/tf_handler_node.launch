@@ -1,0 +1,21 @@
+<launch>
+    <rosparam command="load" file="$(find tf_handler)/config/gazebo.yaml" />
+    
+    <arg name="face_detection" default="false"/>
+    
+    <!-- Face recognition node (if face_detection is true) -->
+    <node if="$(arg face_detection)" 
+          pkg="face_recognition" 
+          type="face_recognition_node.py" 
+          name="face_recognition_node" 
+          output="screen">
+        <param name="target_face_folder" value="/home/urllaptop/ziwon/face_recognition/jiwon"/>
+    </node>
+    
+    <node pkg="tf_handler" 
+          type="tf_handler_node.py" 
+          name="tf_handler_node" 
+          output="screen">
+        <param name="face_detection" value="$(arg face_detection)"/>
+    </node>
+</launch>

@@ -1,0 +1,7 @@
+<launch>
+    <arg name="target_face_folder" default="/home/urllaptop/ziwon/face_recognition/jiwon"/>
+    
+    <node name="face_recognition_node" pkg="face_recognition" type="face_recognition_node.py" output="screen">
+        <param name="target_face_folder" value="$(arg target_face_folder)"/>
+    </node>
+</launch>
