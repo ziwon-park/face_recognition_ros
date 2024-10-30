@@ -2,11 +2,11 @@
     <arg name="target_face_folder" default="/home/urllaptop/ziwon/face_recognition/jiwon"/>
     <arg name="scale_factor" default="0.25"/>
     <arg name="resource_monitor" default="false"/>
-    <arg name="roi_depth" default="false"/>
+    <arg name="depth_roi" default="true"/>
     
     <node name="face_recognition_node" pkg="face_recognition" type="face_recognition_node.py" output="screen">
         <param name="target_face_folder" value="$(arg target_face_folder)"/>
         <param name="resource_monitor" value="$(arg resource_monitor)"/>
-        <param name="roi_depth" value="$(arg roi_depth)"/>
+        <param name="depth_roi" value="$(arg depth_roi)"/>
     </node>
 </launch>

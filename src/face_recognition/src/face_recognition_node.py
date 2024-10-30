@@ -9,8 +9,9 @@ import GPUtil
 from threading import Thread
 
 import rospy
-from sensor_msgs.msg import Image
-from std_msgs.msg import Float32MultiArray, MultiArrayDimension
+from sensor_msgs.msg import Image, PointCloud2, CameraInfo
+import sensor_msgs.point_cloud2 as pc2
+from std_msgs.msg import Float32MultiArray, MultiArrayDimension, Float32
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import Vector3
 from face_model import get_face_model
@@ -59,6 +60,8 @@ class FaceRecognition:
         rospy.init_node('face_recognition_node', anonymous=True)
         self.bridge = CvBridge()
         
+        self.depth_roi = rospy.get_param('~depth_roi', False)
+        
         self.scale_factor = rospy.get_param('~scale_factor', 
             default=0.5)
         # self.scale_factor = 0.5
@@ -91,10 +94,17 @@ class FaceRecognition:
         self.integral_x = 0
         self.integral_y = 0
 
+        # Camera calibration data
+        self.camera_matrix = None
+        self.latest_color_image = None
+        self.latest_depth_image = None
+        self.got_camera_info = False
+
         # Resource usage monitoring
         self.resource_monitor = rospy.get_param('~resource_monitor', 
             default=False)
         self.is_resource_monitored = False
+        
         if self.resource_monitor:    
             self.is_resource_monitored = True    
             self.resource_monitor = ResourceMonitor()
@@ -102,12 +112,21 @@ class FaceRecognition:
         
         # Subscriber
         self.image_sub = rospy.Subscriber('/camera/color/image_raw', Image, self.image_callback, queue_size=1)
+        if self.depth_roi:
+            self.depth_sub = rospy.Subscriber('/camera/depth/image_rect_raw', Image, self.depth_callback, queue_size=1)
+            self.camera_info_sub = rospy.Subscriber('/camera/depth/camera_info', CameraInfo, self.camera_info_callback, queue_size=1)
         
         # Publisher
         self.face_pub = rospy.Publisher('/face', Image, queue_size=10)
         self.bbox_pub = rospy.Publisher('/face_bbox', Float32MultiArray, queue_size=10)
+        if self.depth_roi:
+            self.roi_cloud_pub = rospy.Publisher('/face_depth_roi', PointCloud2, queue_size=10)
+            self.face_depth_pub = rospy.Publisher('/face_depth', Float32, queue_size=10)
         
+        # Logger
         rospy.loginfo(f"Face recognition node initiated with {model_name} model")
+        if self.depth_roi:
+            rospy.loginfo("Depth ROI visualization enabled")
         
     def calculate_robot_control(self, face_center_x, face_center_y):
         Kp = 0.001  
@@ -154,15 +173,137 @@ class FaceRecognition:
         
         bbox_msg.data = [float(center_x), float(center_y), float(w_orig), float(h_orig)]
         self.bbox_pub.publish(bbox_msg)
+        
+    def camera_info_callback(self, msg):
+        if not self.got_camera_info:
+            self.camera_matrix = np.array(msg.K).reshape(3, 3)
+            self.got_camera_info = True
+            rospy.loginfo("Received camera calibration data")
+            
+    def depth_callback(self, msg):
+        try: 
+            self.latest_depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+        except CvBridgeError as e:
+            rospy.logerr(f"Error converting depth image: {e}")
+            
+    def create_point_cloud(self, depth_roi, color_roi, roi_coords):
+        if not self.got_camera_info:
+            rospy.logwarn("No camera info available")
+            return None
+            
+        try:
+            x, y, w, h = roi_coords
+            
+            # Verify input dimensions
+            if depth_roi.shape != color_roi.shape[:2]:
+                rospy.logerr(f"Mismatched ROI shapes: depth {depth_roi.shape}, color {color_roi.shape[:2]}")
+                return None
+                
+            if w <= 0 or h <= 0:
+                rospy.logwarn("Invalid ROI dimensions in create_point_cloud")
+                return None
+                
+            points = []
+            
+            fx = self.camera_matrix[0, 0]
+            fy = self.camera_matrix[1, 1]
+            cx = self.camera_matrix[0, 2]
+            cy = self.camera_matrix[1, 2]
+            
+            height, width = depth_roi.shape
+            
+            for v in range(height):
+                for u in range(width):
+                    try:
+                        depth = depth_roi[v, u]
+                        if depth == 0:  # Skip invalid depth values
+                            continue
 
+                        z = depth / 1000.0  # Convert mm to meters
+                        x_3d = ((u + x) - cx) * z / fx
+                        y_3d = ((v + y) - cy) * z / fy
+
+                        # Get color
+                        b, g, r = color_roi[v, u]
+                        rgb = (r << 16) | (g << 8) | b
+
+                        points.append([x_3d, y_3d, z, rgb])
+                    except IndexError as e:
+                        rospy.logerr(f"Index error in point cloud creation: {e}")
+                        continue
+
+            if not points:
+                rospy.logwarn("No valid points generated for point cloud")
+                return None
+
+            fields = [
+                pc2.PointField('x', 0, pc2.PointField.FLOAT32, 1),
+                pc2.PointField('y', 4, pc2.PointField.FLOAT32, 1),
+                pc2.PointField('z', 8, pc2.PointField.FLOAT32, 1),
+                pc2.PointField('rgb', 12, pc2.PointField.UINT32, 1)
+            ]
+
+            header = rospy.Header()
+            header.frame_id = "camera_color_optical_frame"
+            header.stamp = rospy.Time.now()
+
+            pc_msg = pc2.create_cloud(header, fields, points)
+            return pc_msg
+            
+        except Exception as e:
+            rospy.logerr(f"Error in create_point_cloud: {e}")
+            return None
+    
+    def process_face_depth(self, face_location):
+        if self.latest_depth_image is None or self.latest_color_image is None:
+            return None, None
+
+        x, y, w, h = face_location
+        height, width = self.latest_depth_image.shape[:2]
+            
+        x = max(0, min(x, width - 1))
+        y = max(0, min(y, height - 1))
+        w = min(w, width - x)
+        h = min(h, height - y)
+
+        # Check if ROI has valid size
+        if w <= 0 or h <= 0:
+            rospy.logwarn("Invalid ROI dimensions")
+            return None, None
+
+        try:
+            depth_roi = self.latest_depth_image[y:y+h, x:x+w].copy()
+            color_roi = self.latest_color_image[y:y+h, x:x+w].copy()
+            
+            # Verify ROI sizes
+            if depth_roi.size == 0 or color_roi.size == 0:
+                rospy.logwarn("Empty ROI detected")
+                return None, None
+                
+            valid_depths = depth_roi[depth_roi > 0]
+            if len(valid_depths) > 0:
+                avg_depth = float(np.mean(valid_depths)) / 1000.0  
+            else:
+                avg_depth = None
+
+            # Create point cloud
+            point_cloud = self.create_point_cloud(depth_roi, color_roi, (x, y, w, h))
+
+            return avg_depth, point_cloud
+            
+        except Exception as e:
+            rospy.logerr(f"Error in process_face_depth: {e}")
+            return None, None
+    
     def image_callback(self, data): 
         # os.system("clear")
         # print("inside image_callback")
         start_time = time.time()
         
-        
         try:
             cv_image = self.bridge.imgmsg_to_cv2(data, 'rgb8')
+            if self.depth_roi:
+                self.latest_color_image = cv_image.copy()
         except CvBridgeError as e:
             print(e)
             
@@ -189,6 +330,8 @@ class FaceRecognition:
                 face_center_x = x + w // 2
                 face_center_y = y + h // 2
                 target_face_found = True
+                face_location = (int(x/self.scale_factor), int(y/self.scale_factor), 
+                            int(w/self.scale_factor), int(h/self.scale_factor))
                 
             else:
                 self.tracking_face = False
@@ -230,6 +373,8 @@ class FaceRecognition:
                     self.face_tracker = cv2.TrackerCSRT_create()
                     self.face_tracker.init(resized_image, (x, y, w, h))
                     self.tracking_face = True
+                    face_location = (int(x/self.scale_factor), int(y/self.scale_factor), 
+                                int(w/self.scale_factor), int(h/self.scale_factor))
                     break
         
         if target_face_found:
@@ -249,6 +394,21 @@ class FaceRecognition:
             # rospy.loginfo(f"Target person found. Roll: {roll:.4f}, Pitch: {pitch:.4f}")
             
             self.publish_bbox(x, y, w, h)
+            
+            # depth roi가 true 일 때
+            if self.depth_roi and face_location is not None:
+                avg_depth, point_cloud = self.process_face_depth(face_location)
+                
+                if avg_depth is not None:
+                    depth_msg = Float32()
+                    depth_msg.data = avg_depth
+                    self.face_depth_pub.publish(depth_msg)
+                
+                if point_cloud is not None:
+                    self.roi_cloud_pub.publish(point_cloud)
+                
+            
+            
         # else:
         #     rospy.loginfo("Target person not found in the image")
 

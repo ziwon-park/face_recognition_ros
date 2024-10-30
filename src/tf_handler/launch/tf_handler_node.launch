@@ -2,6 +2,10 @@
     <rosparam command="load" file="$(find tf_handler)/config/realsense.yaml" />
     
     <arg name="face_detection" default="false"/>
+    <arg name="target_face_folder" default="/home/urllaptop/ziwon/face_recognition/jiwon"/>
+    <arg name="scale_factor" default="0.25"/>
+    <arg name="resource_monitor" default="false"/>
+    <arg name="depth_roi" default="false"/>
     
     <!-- Face recognition node (if face_detection is true) -->
     <node if="$(arg face_detection)" 
@@ -9,7 +13,9 @@
           type="face_recognition_node.py" 
           name="face_recognition_node" 
           output="screen">
-        <param name="target_face_folder" value="/home/urllaptop/ziwon/face_recognition/jiwon"/>
+        <param name="target_face_folder" value="$(arg target_face_folder)"/>
+        <param name="resource_monitor" value="$(arg resource_monitor)"/>
+        <param name="depth_roi" value="$(arg depth_roi)"/>
     </node>
     
     <node pkg="tf_handler" 
