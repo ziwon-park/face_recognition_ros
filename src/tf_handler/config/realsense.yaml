@@ -1,13 +1,27 @@
+# Camera intrinsic parameters
 camera_face:
-  # Camera intrinsic parameters
   fx: 911.999267578125
   fy: 911.7703247070312
   cx: 648.8182983398438
   cy: 350.3193664550781
   width: 1280
   height: 720
-  
-  # Transform parameters
-  trans_x: 0.011611
-  trans_y: 0.004437
-  trans_z: 0.000108
+
+# Transform parameters
+trans_x: 0.011611
+trans_y: 0.004437
+trans_z: 0.000108
+
+# Rotation parameters
+rotation:
+  # r1: ['y', -1.5708]  # Y축 기준 -90도 회전 (카메라 Z축을 로봇 X축으로)
+  # r2: ['z', 3.1416]   # Z축 기준 180도 회전 (카메라 X축을 로봇 -Y축으로)
+  # r3: ['x', 3.1416]
+
+  # r1: ['y', -1.5708]  # Y축 기준 -90도 회전 (카메라 Z축을 로봇 X축으로)
+  # r2: ['x', 3.1416]   # X축 기준 180도 회전
+  # r3: ['z', -1.5708]  # Z축 기준 -90도 회전
+
+  r1: ['x', 3.1416]
+  r2: ['y', -0.1745]
+  r3: ['z', -0.1]

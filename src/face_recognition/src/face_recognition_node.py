@@ -95,7 +95,7 @@ class FaceRecognition:
         self.integral_y = 0
         
         # Face tracking
-        self.face_tracker = cv2.TrackerKCF_create()
+        self.face_tracker = cv2.TrackerCSRT_create()
         self.tracking_face = False
         
         # resource usage monitoring
@@ -139,13 +139,15 @@ class FaceRecognition:
         bbox_msg.layout.dim[0].size = 4
         bbox_msg.layout.dim[0].stride = 4
         
-        # 원래 사이즈로 되돌리기
         x_orig = x / self.scale_factor
         y_orig = y / self.scale_factor
         w_orig = w / self.scale_factor
         h_orig = h / self.scale_factor
         
-        bbox_msg.data = [float(x_orig), float(y_orig), float(w_orig), float(h_orig)]
+        center_x = x_orig + (w_orig / 2)
+        center_y = y_orig + (h_orig / 2)
+        
+        bbox_msg.data = [float(center_x), float(center_y), float(w_orig), float(h_orig)]
         self.bbox_pub.publish(bbox_msg)
 
     def image_callback(self, data): 

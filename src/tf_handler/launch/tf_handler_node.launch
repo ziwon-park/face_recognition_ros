@@ -1,5 +1,5 @@
 <launch>
-    <rosparam command="load" file="$(find tf_handler)/config/gazebo.yaml" />
+    <rosparam command="load" file="$(find tf_handler)/config/realsense.yaml" />
     
     <arg name="face_detection" default="false"/>
     

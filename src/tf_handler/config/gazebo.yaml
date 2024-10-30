@@ -1,13 +1,32 @@
+# Camera intrinsic parameters
 camera_face:
-  # Camera intrinsic parameters
   fx: 268.0127571872258
   fy: 268.0127571872258
   cx: 0.0045
   cy: 0.0039
   width: 928
   height: 800
+
+# Transform parameters
+trans_x: 0.2785
+trans_y: 0.0125
+trans_z: 0.0167
+
+# Rotation parameters
+
+# 로봇 좌표계 (trunk frame):
+# - X: 전방
+# - Y: 좌측
+# - Z: 상방
+
+# 카메라 좌표계 :
+# - Z: 전방
+# - X: 우측
+# - Y: 하방
+
+rotation:
+  r1: ['z', 3.14159]  # Z축 180도
+  r2: ['y', -1.5708]  # Y축 -90도
+  r3: ['x', 1.5708]   # X축 90도
   
-  # Transform parameters
-  trans_x: 0.2785
-  trans_y: 0.0125
-  trans_z: 0.0167
+

@@ -29,9 +29,16 @@ class ObjectTracker:
             self.image_height = rospy.get_param('camera_face/height')    
                 
             # Transform parameters
-            self.trans_x = rospy.get_param('camera_face/trans_x', 0.2785)  
-            self.trans_y = rospy.get_param('camera_face/trans_y', 0.0125)
-            self.trans_z = rospy.get_param('camera_face/trans_z', 0.0167)    
+            self.trans_x = rospy.get_param('trans_x', 0.2785)  
+            self.trans_y = rospy.get_param('trans_y', 0.0125)
+            self.trans_z = rospy.get_param('trans_z', 0.0167)    
+            
+            # Rotation parameters            
+            self.rot_params = {}
+            for i in range(1, 4):  # r1, r2, r3
+                param_name = f'rotation/r{i}'
+                if rospy.has_param(param_name):
+                    self.rot_params[f'r{i}'] = rospy.get_param(param_name)  
 
             self.got_camera_info = True
             
@@ -68,31 +75,45 @@ class ObjectTracker:
         self.upper_green = np.array([80, 255, 255])
 
         self.setup_transforms()
+            
+    def create_rotation_matrix(self, axis, angle):
+        """
+        주어진 축과 각도로 회전 행렬 생성
+        angle: 라디안 단위의 회전 각도
+        """
+        if axis.lower() == 'x':
+            return rotation_matrix(angle, [1, 0, 0])
+        elif axis.lower() == 'y':
+            return rotation_matrix(angle, [0, 1, 0])
+        elif axis.lower() == 'z':
+            return rotation_matrix(angle, [0, 0, 1])
+        else:
+            raise ValueError(f"Invalid rotation axis: {axis}")
 
     def setup_transforms(self):
-        """
-        로봇 좌표계 (trunk frame):
-        - X: 전방
-        - Y: 좌측
-        - Z: 상방
+        rot_mat = np.eye(4)
+        if self.rot_params:
+            for r_key in sorted(self.rot_params.keys()):  
+                axis, angle = self.rot_params[r_key]
+                r_mat = self.create_rotation_matrix(axis, angle)
+                rot_mat = np.matmul(rot_mat, r_mat)
+        else:
+            rospy.logwarn("No rotation parameters found in YAML, using default rotation")
+            align_rot_y = rotation_matrix(-np.pi/2, [0, 1, 0])
+            rot_x = rotation_matrix(-np.pi/2, [1, 0, 0])
+            rot_z = rotation_matrix(-np.pi/2, [0, 0, 1])
+            rot_mat = np.matmul(np.matmul(align_rot_y, rot_z), rot_x)
+        # rot_x_pi = rotation_matrix(np.pi, [1, 0, 0])
         
-        카메라 좌표계 :
-        - Z: 전방
-        - X: 우측
-        - Y: 하방
-        """
+        # rot_x_minus_pi_2 = rotation_matrix(-np.pi/2, [1, 0, 0])
+        # rot_z_minus_pi_2 = rotation_matrix(-np.pi/2, [0, 0, 1])
         
-        rot_x_pi = rotation_matrix(np.pi, [1, 0, 0])
+        # # 카메라의 Z축을 로봇의 X축과 정렬
+        # align_rot_y = rotation_matrix(-np.pi/2, [0, 1, 0])
+        # align_rot_z = rotation_matrix(np.pi, [0, 0, 1])
+        # align_rot = np.matmul(align_rot_z, align_rot_y)
         
-        rot_x_minus_pi_2 = rotation_matrix(-np.pi/2, [1, 0, 0])
-        rot_z_minus_pi_2 = rotation_matrix(-np.pi/2, [0, 0, 1])
-        
-        # 카메라의 Z축을 로봇의 X축과 정렬
-        align_rot_y = rotation_matrix(-np.pi/2, [0, 1, 0])
-        align_rot_z = rotation_matrix(np.pi, [0, 0, 1])
-        align_rot = np.matmul(align_rot_z, align_rot_y)
-        
-        rot_mat = np.matmul(np.matmul(align_rot, rot_z_minus_pi_2), rot_x_minus_pi_2)
+        # rot_mat = np.matmul(np.matmul(align_rot, rot_z_minus_pi_2), rot_x_minus_pi_2)
         
         # translation
         trans_mat = np.eye(4)
@@ -140,6 +161,7 @@ class ObjectTracker:
             cam_x = (center_x - self.image_width/2) / self.fx
             cam_y = (center_y - self.image_height/2) / self.fy
             
+            # 여기를 손봐야 함. 
             depth = 1.0
 
             point_camera = [
@@ -178,7 +200,7 @@ class ObjectTracker:
             mask = cv2.inRange(hsv, self.lower_green, self.upper_green)
             
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
+             
             if contours:
                 largest_contour = max(contours, key=cv2.contourArea)
                 x, y, w, h = cv2.boundingRect(largest_contour)
@@ -222,7 +244,7 @@ class ObjectTracker:
 
     def publish_marker(self, point_trunk):
         marker = Marker()
-        marker.header.frame_id = "trunk"
+        marker.header.frame_id = "base"
         marker.header.stamp = rospy.Time.now()
         marker.type = Marker.ARROW
         marker.action = Marker.ADD
@@ -235,10 +257,9 @@ class ObjectTracker:
         dy = point_trunk[1]
         dz = point_trunk[2]
         
-        yaw = -np.arctan2(dy, dx)
+        yaw = np.arctan2(dy, dx)
         pitch = np.arctan2(dz, np.sqrt(dx*dx + dy*dy))
-        q = quaternion_from_euler(0, pitch, yaw - np.pi/2)
-
+        q = quaternion_from_euler(0, pitch, yaw)
         
         marker.pose.orientation.x = q[0]
         marker.pose.orientation.y = q[1]
@@ -278,7 +299,8 @@ class ObjectTracker:
         pose_msg.pose.position.y = point_trunk[1]
         pose_msg.pose.position.z = point_trunk[2]
         
-        q = quaternion_from_euler(0, pitch, yaw - np.pi/2)
+        yaw = - yaw
+        q = quaternion_from_euler(0, pitch, yaw)
         pose_msg.pose.orientation.x = q[0]
         pose_msg.pose.orientation.y = q[1]
         pose_msg.pose.orientation.z = q[2]
