@@ -25,14 +25,9 @@ class ResourceMonitor(Thread):
         
     def run(self):
         while not self.stopped:
-            # CPU 사용량
-            cpu_usage = self.process.cpu_percent(interval=1)
-            
-            # 메모리 사용량
+            cpu_usage = self.process.cpu_percent(interval=1)            
             memory_info = self.process.memory_info()
-            memory_usage = memory_info.rss / psutil.virtual_memory().total * 100
-            
-            # GPU 사용량
+            memory_usage = memory_info.rss / psutil.virtual_memory().total * 100            
             gpu_usage = self.get_gpu_usage()
             
             print(f"Process CPU Usage: {cpu_usage:.2f}%, "
@@ -63,11 +58,15 @@ class FaceRecognition:
     def __init__(self, model_name='dlib'):
         rospy.init_node('face_recognition_node', anonymous=True)
         self.bridge = CvBridge()
-        self.image_sub = rospy.Subscriber('/camera/color/image_raw', Image, self.image_callback, queue_size=1)
-        self.face_pub = rospy.Publisher('/face', Image, queue_size=10)
-        self.bbox_pub = rospy.Publisher('/face_bbox', Float32MultiArray, queue_size=10)
-
-
+        
+        self.scale_factor = rospy.get_param('~scale_factor', 
+            default=0.5)
+        # self.scale_factor = 0.5
+        
+        # Face tracking
+        self.face_tracker = cv2.TrackerCSRT_create()
+        self.tracking_face = False
+    
         self.face_model = get_face_model(model_name)
         
         # self.target_face_folder = "/home/nuc/ros/face_ws/src/face_recognition/face/Myung"
@@ -77,8 +76,6 @@ class FaceRecognition:
 
         self.target_person_name = os.path.basename(os.path.normpath(self.target_face_folder))
         self.face_model.load_target_face(self.target_face_folder)
-        
-        self.scale_factor = 0.5
         
         self.frame_times = []
         self.fps_update_interval = 100
@@ -93,14 +90,22 @@ class FaceRecognition:
         self.prev_error_y = 0
         self.integral_x = 0
         self.integral_y = 0
+
+        # Resource usage monitoring
+        self.resource_monitor = rospy.get_param('~resource_monitor', 
+            default=False)
+        self.is_resource_monitored = False
+        if self.resource_monitor:    
+            self.is_resource_monitored = True    
+            self.resource_monitor = ResourceMonitor()
+            self.resource_monitor.start()
         
-        # Face tracking
-        self.face_tracker = cv2.TrackerCSRT_create()
-        self.tracking_face = False
+        # Subscriber
+        self.image_sub = rospy.Subscriber('/camera/color/image_raw', Image, self.image_callback, queue_size=1)
         
-        # resource usage monitoring
-        self.resource_monitor = ResourceMonitor()
-        self.resource_monitor.start()
+        # Publisher
+        self.face_pub = rospy.Publisher('/face', Image, queue_size=10)
+        self.bbox_pub = rospy.Publisher('/face_bbox', Float32MultiArray, queue_size=10)
         
         rospy.loginfo(f"Face recognition node initiated with {model_name} model")
         
@@ -194,7 +199,6 @@ class FaceRecognition:
                 if isinstance(face_location, dict):  # DeepFace format
                     x, y, w, h = face_location['x'], face_location['y'], face_location['w'], face_location['h']
                 elif len(face_location) == 4:  # dlib format
-                    print("inside dlib format")
                     top, right, bottom, left = face_location
                     y, x, h, w = top, left, bottom - top, right - left
                 else:  # FaceNet-PyTorch format
@@ -240,11 +244,13 @@ class FaceRecognition:
             distance_text = f"Embedding Dist: {self.face_distance:.4f}" if self.face_distance is not None else "Dist: N/A"
             cv2.putText(resized_image, f"{distance_text}", 
                         (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            roll, pitch = self.calculate_robot_control(face_center_x / self.scale_factor, face_center_y / self.scale_factor)
-            rospy.loginfo(f"Target person found. Roll: {roll:.4f}, Pitch: {pitch:.4f}")
+            
+            # roll, pitch = self.calculate_robot_control(face_center_x / self.scale_factor, face_center_y / self.scale_factor)
+            # rospy.loginfo(f"Target person found. Roll: {roll:.4f}, Pitch: {pitch:.4f}")
+            
             self.publish_bbox(x, y, w, h)
-        else:
-            rospy.loginfo("Target person not found in the image")
+        # else:
+        #     rospy.loginfo("Target person not found in the image")
 
         try:
             self.face_pub.publish(self.bridge.cv2_to_imgmsg(resized_image, 'bgr8'))
@@ -258,7 +264,7 @@ class FaceRecognition:
         
         if len(self.frame_times) % self.fps_update_interval == 0:
             fps = self.calculate_fps()
-            rospy.loginfo(f"Current FPS: {fps:.2f}")
+            # rospy.loginfo(f"Current FPS: {fps:.2f}")
 
         processing_time = end_time - start_time
         # rospy.loginfo(f"Frame processing time: {processing_time:.4f} seconds")
@@ -267,8 +273,9 @@ class FaceRecognition:
         try:
             rospy.spin()
         finally:
-            self.resource_monitor.stop()
-            self.resource_monitor.join()
+            if self.is_resource_monitored:
+                self.resource_monitor.stop()
+                self.resource_monitor.join()
             
 if __name__ == '__main__':
     try:
