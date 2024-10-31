@@ -39,6 +39,7 @@ class DlibFaceModel(FaceModelBase):
                 image_path = os.path.join(folder_path, filename)
                 known_image = face_recognition.load_image_file(image_path)
                 face_encoding = face_recognition.face_encodings(known_image)
+                # face_encoding = face_recognition.face_encodings(known_image, model="large")
                 
                 if face_encoding:
                     self.target_face_encodings.append(face_encoding[0])

@@ -6,7 +6,7 @@ import numpy as np
 
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import Float32MultiArray, MultiArrayDimension
+from std_msgs.msg import Float32MultiArray, Float32, MultiArrayDimension
 
 from cv_bridge import CvBridge
 from visualization_msgs.msg import Marker
@@ -59,6 +59,7 @@ class ObjectTracker:
         if self.use_face_detection:
             rospy.loginfo("Using real camera")
             self.bbox_sub = rospy.Subscriber('/face_bbox', Float32MultiArray, self.bbox_callback)
+            self.depth_sub = rospy.Subscriber('/face_depth', Float32, self.depth_data_callback)
         else:
             rospy.loginfo("Using gazebo camera")
             if self.got_camera_info:
@@ -71,6 +72,7 @@ class ObjectTracker:
         #                                     self.image_callback)
         # self.image_sub = None
         
+        self.face_depth = 1.0
         self.lower_green = np.array([40, 40, 40])
         self.upper_green = np.array([80, 255, 255])
 
@@ -146,7 +148,10 @@ class ObjectTracker:
                                             self.image_callback)
             
             self.camera_info_sub.unregister()
-                
+            
+
+    def depth_data_callback(self, msg):
+        self.face_depth = msg.data
                 
     def bbox_callback(self, msg):
         if not self.got_camera_info:
@@ -162,7 +167,8 @@ class ObjectTracker:
             cam_y = (center_y - self.image_height/2) / self.fy
             
             # 여기를 손봐야 함. 
-            depth = 1.0
+            depth = self.face_depth
+            print("depth is", depth)
 
             point_camera = [
                 depth,    
@@ -210,15 +216,15 @@ class ObjectTracker:
                 center_x = x + w/2
                 center_y = y + h/2
                 
-                cam_x = -((center_x - self.image_width/2) / self.fx) 
-                cam_y = -((center_y - self.image_height/2) / self.fy) 
+                cam_x = ((center_x - self.image_width/2) / self.fx) 
+                cam_y = ((center_y - self.image_height/2) / self.fy) 
                 
                 depth = 1.0
 
                 point_camera = [
                     depth,    
-                    -cam_x * depth, 
-                    -cam_y * depth  
+                    cam_x * depth, 
+                    cam_y * depth  
                 ]
                 
                 point_trunk = self.transform_point(point_camera)

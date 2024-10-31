@@ -4,67 +4,29 @@ import os
 import numpy as np
 import cv2
 import time
-import psutil
-import GPUtil
-from threading import Thread
 
 import rospy
+from cv_bridge import CvBridge, CvBridgeError
+
 from sensor_msgs.msg import Image, PointCloud2, CameraInfo
 import sensor_msgs.point_cloud2 as pc2
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension, Float32
-from cv_bridge import CvBridge, CvBridgeError
-from geometry_msgs.msg import Vector3
+from visualization_msgs.msg import Marker
+from geometry_msgs.msg import Point, Vector3
+
 from face_model import get_face_model
-
-class ResourceMonitor(Thread):
-    def __init__(self, interval=3):
-        Thread.__init__(self)
-        self.interval = interval
-        self.stopped = False
-        self.process = psutil.Process(os.getpid())
-
-        
-    def run(self):
-        while not self.stopped:
-            cpu_usage = self.process.cpu_percent(interval=1)            
-            memory_info = self.process.memory_info()
-            memory_usage = memory_info.rss / psutil.virtual_memory().total * 100            
-            gpu_usage = self.get_gpu_usage()
-            
-            print(f"Process CPU Usage: {cpu_usage:.2f}%, "
-                  f"Process Memory Usage: {memory_usage:.2f}%, "
-                  f"Process GPU Usage: {gpu_usage:.2f}%")
-            
-            time.sleep(self.interval)
-            
-    def get_gpu_usage(self):
-        try:
-            gpus = GPUtil.getGPUs()
-            if gpus:
-                import subprocess
-                result = subprocess.check_output(['nvidia-smi', '--query-compute-apps=pid,used_memory', '--format=csv,nounits,noheader'])
-                for line in result.decode().strip().split('\n'):
-                    pid, used_memory = map(int, line.split(','))
-                    if pid == self.process.pid:
-                        return (used_memory / gpus[0].memoryTotal) * 100
-            return 0
-        except Exception as e:
-            print(f"Error getting GPU usage: {e}")
-            return 0
-
-    def stop(self):
-        self.stopped = True
+from util import ResourceMonitor
 
 class FaceRecognition:
     def __init__(self, model_name='dlib'):
         rospy.init_node('face_recognition_node', anonymous=True)
         self.bridge = CvBridge()
         
-        self.depth_roi = rospy.get_param('~depth_roi', False)
-        
-        self.scale_factor = rospy.get_param('~scale_factor', 
-            default=0.5)
-        # self.scale_factor = 0.5
+        # Parameters
+        self.depth_roi = rospy.get_param('~depth_roi', default=False)
+        self.scale_factor = rospy.get_param('~scale_factor', default=0.5)
+        self.target_face_folder = rospy.get_param('~target_face_folder', default="/home/nuc/ros/face_ws/src/face_recognition/face/Myung")
+        self.resource_monitor = rospy.get_param('~resource_monitor', default=False)
         
         # Face tracking
         self.face_tracker = cv2.TrackerCSRT_create()
@@ -72,11 +34,6 @@ class FaceRecognition:
     
         self.face_model = get_face_model(model_name)
         
-        # self.target_face_folder = "/home/nuc/ros/face_ws/src/face_recognition/face/Myung"
-
-        self.target_face_folder = rospy.get_param('~target_face_folder', 
-            default="/home/nuc/ros/face_ws/src/face_recognition/face/Myung")
-
         self.target_person_name = os.path.basename(os.path.normpath(self.target_face_folder))
         self.face_model.load_target_face(self.target_face_folder)
         
@@ -101,8 +58,6 @@ class FaceRecognition:
         self.got_camera_info = False
 
         # Resource usage monitoring
-        self.resource_monitor = rospy.get_param('~resource_monitor', 
-            default=False)
         self.is_resource_monitored = False
         
         if self.resource_monitor:    
@@ -120,7 +75,9 @@ class FaceRecognition:
         self.face_pub = rospy.Publisher('/face', Image, queue_size=10)
         self.bbox_pub = rospy.Publisher('/face_bbox', Float32MultiArray, queue_size=10)
         if self.depth_roi:
-            self.roi_cloud_pub = rospy.Publisher('/face_depth_roi', PointCloud2, queue_size=10)
+            self.plane_marker_pub = rospy.Publisher('/face_plane', Marker, queue_size=10)
+
+            # self.roi_cloud_pub = rospy.Publisher('/face_depth_roi', PointCloud2, queue_size=10)
             self.face_depth_pub = rospy.Publisher('/face_depth', Float32, queue_size=10)
         
         # Logger
@@ -174,6 +131,64 @@ class FaceRecognition:
         bbox_msg.data = [float(center_x), float(center_y), float(w_orig), float(h_orig)]
         self.bbox_pub.publish(bbox_msg)
         
+    def create_plane_marker(self, center_point, normal, size=0.2):
+        # 평면 visualize
+        
+        marker = Marker()
+        marker.header.frame_id = "camera_color_optical_frame"
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "face_plane"
+        marker.id = 0
+        marker.type = Marker.TRIANGLE_LIST
+        marker.action = Marker.ADD
+        
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 1.0
+        marker.scale.y = 1.0
+        marker.scale.z = 1.0
+        
+        marker.color.r = 0.0
+        marker.color.g = 1.0
+        marker.color.b = 0.0
+        marker.color.a = 0.5
+
+        z_axis = normal / np.linalg.norm(normal)
+        x_axis = np.array([1.0, 0.0, 0.0])
+        if abs(np.dot(x_axis, z_axis)) > 0.9:
+            x_axis = np.array([0.0, 1.0, 0.0])
+        y_axis = np.cross(z_axis, x_axis)
+        x_axis = np.cross(y_axis, z_axis)
+        
+        x_axis = x_axis / np.linalg.norm(x_axis)
+        y_axis = y_axis / np.linalg.norm(y_axis)
+
+        corners = [
+            center_point + size * (-x_axis - y_axis),
+            center_point + size * (x_axis - y_axis),
+            center_point + size * (x_axis + y_axis),
+            center_point + size * (-x_axis + y_axis)
+        ]
+
+        p1 = Point()
+        p1.x, p1.y, p1.z = corners[0]
+        p2 = Point()
+        p2.x, p2.y, p2.z = corners[1]
+        p3 = Point()
+        p3.x, p3.y, p3.z = corners[2]
+        p4 = Point()
+        p4.x, p4.y, p4.z = corners[3]
+
+        # 두 개의 삼각형으로 평면 구성
+        marker.points.append(p1)
+        marker.points.append(p2)
+        marker.points.append(p3)
+
+        marker.points.append(p1)
+        marker.points.append(p3)
+        marker.points.append(p4)
+
+        return marker
+
     def camera_info_callback(self, msg):
         if not self.got_camera_info:
             self.camera_matrix = np.array(msg.K).reshape(3, 3)
@@ -185,7 +200,7 @@ class FaceRecognition:
             self.latest_depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
         except CvBridgeError as e:
             rospy.logerr(f"Error converting depth image: {e}")
-            
+
     def create_point_cloud(self, depth_roi, color_roi, roi_coords):
         if not self.got_camera_info:
             rospy.logwarn("No camera info available")
@@ -194,7 +209,6 @@ class FaceRecognition:
         try:
             x, y, w, h = roi_coords
             
-            # Verify input dimensions
             if depth_roi.shape != color_roi.shape[:2]:
                 rospy.logerr(f"Mismatched ROI shapes: depth {depth_roi.shape}, color {color_roi.shape[:2]}")
                 return None
@@ -202,54 +216,96 @@ class FaceRecognition:
             if w <= 0 or h <= 0:
                 rospy.logwarn("Invalid ROI dimensions in create_point_cloud")
                 return None
-                
-            points = []
+            
+            height, width = depth_roi.shape
+            sampling_step = 3
+            
+            max_points = (height // sampling_step) * (width // sampling_step)
+            points_3d = np.empty((max_points, 3), dtype=np.float32)
+            points_color = np.empty((max_points, 3), dtype=np.uint8)
             
             fx = self.camera_matrix[0, 0]
             fy = self.camera_matrix[1, 1]
             cx = self.camera_matrix[0, 2]
             cy = self.camera_matrix[1, 2]
             
-            height, width = depth_roi.shape
+            u_coords, v_coords = np.meshgrid(
+                np.arange(0, width, sampling_step),
+                np.arange(0, height, sampling_step)
+            )
             
-            for v in range(height):
-                for u in range(width):
-                    try:
-                        depth = depth_roi[v, u]
-                        if depth == 0:  # Skip invalid depth values
-                            continue
+            depths = depth_roi[v_coords, u_coords]
+            valid_mask = depths > 0
+            
+            valid_depths = depths[valid_mask]
+            valid_u = u_coords[valid_mask]
+            valid_v = v_coords[valid_mask]
+            
+            z = valid_depths / 1000.0  # mm to meters
+            x_3d = ((valid_u + x) - cx) * z / fx
+            y_3d = ((valid_v + y) - cy) * z / fy
+            
+            n_valid_points = len(z)
+            points_3d[:n_valid_points] = np.column_stack((x_3d, y_3d, z))
+                        
+            points_3d = points_3d[:n_valid_points]
 
-                        z = depth / 1000.0  # Convert mm to meters
-                        x_3d = ((u + x) - cx) * z / fx
-                        y_3d = ((v + y) - cy) * z / fy
-
-                        # Get color
-                        b, g, r = color_roi[v, u]
-                        rgb = (r << 16) | (g << 8) | b
-
-                        points.append([x_3d, y_3d, z, rgb])
-                    except IndexError as e:
-                        rospy.logerr(f"Index error in point cloud creation: {e}")
-                        continue
-
-            if not points:
-                rospy.logwarn("No valid points generated for point cloud")
+            if len(points_3d) < 3:
+                rospy.logwarn("Not enough points for plane estimation")
                 return None
 
-            fields = [
-                pc2.PointField('x', 0, pc2.PointField.FLOAT32, 1),
-                pc2.PointField('y', 4, pc2.PointField.FLOAT32, 1),
-                pc2.PointField('z', 8, pc2.PointField.FLOAT32, 1),
-                pc2.PointField('rgb', 12, pc2.PointField.UINT32, 1)
-            ]
-
-            header = rospy.Header()
-            header.frame_id = "camera_color_optical_frame"
-            header.stamp = rospy.Time.now()
-
-            pc_msg = pc2.create_cloud(header, fields, points)
-            return pc_msg
+            # RANSAC 파라미터
+            best_plane = None
+            max_inliers = 0
+            threshold = 0.02  # 20mm threshold
+            n_iterations = 100
             
+            for _ in range(n_iterations):
+                idx = np.random.choice(n_valid_points, 3, replace=False)
+                p1, p2, p3 = points_3d[idx]
+                
+                v1 = p2 - p1
+                v2 = p3 - p1
+                normal = np.cross(v1, v2)
+                
+                if np.all(normal == 0):
+                    continue
+                    
+                normal = normal / np.linalg.norm(normal)
+                d = -np.dot(normal, p1)
+                
+                distances = np.abs(points_3d @ normal + d)
+                inliers = distances < threshold
+                n_inliers = np.sum(inliers)
+                
+                if n_inliers > max_inliers:
+                    max_inliers = n_inliers
+                    best_plane = (normal, d)
+                    best_inliers = inliers
+
+            if best_plane is None:
+                rospy.logwarn("Could not estimate plane")
+                return None
+                
+            inlier_points = points_3d[best_inliers]
+            center_point = np.mean(inlier_points, axis=0)
+            
+            normal, d = best_plane
+            plane_marker = self.create_plane_marker(center_point, normal)
+            self.plane_marker_pub.publish(plane_marker)
+            
+            plane_distance = abs(d)
+            
+            # 거리 발행
+            distance_msg = Float32()
+            distance_msg.data = plane_distance
+            self.face_depth_pub.publish(distance_msg)
+            
+            # rospy.loginfo(f"Estimated plane: {normal[0]:.3f}x + {normal[1]:.3f}y + {normal[2]:.3f}z + {d:.3f} = 0")
+            # rospy.loginfo(f"Number of inliers: {len(inlier_points)} / {n_valid_points}")
+            
+            return None
+                
         except Exception as e:
             rospy.logerr(f"Error in create_point_cloud: {e}")
             return None
@@ -266,7 +322,6 @@ class FaceRecognition:
         w = min(w, width - x)
         h = min(h, height - y)
 
-        # Check if ROI has valid size
         if w <= 0 or h <= 0:
             rospy.logwarn("Invalid ROI dimensions")
             return None, None
@@ -286,7 +341,6 @@ class FaceRecognition:
             else:
                 avg_depth = None
 
-            # Create point cloud
             point_cloud = self.create_point_cloud(depth_roi, color_roi, (x, y, w, h))
 
             return avg_depth, point_cloud
@@ -402,12 +456,6 @@ class FaceRecognition:
                 if avg_depth is not None:
                     depth_msg = Float32()
                     depth_msg.data = avg_depth
-                    self.face_depth_pub.publish(depth_msg)
-                
-                if point_cloud is not None:
-                    self.roi_cloud_pub.publish(point_cloud)
-                
-            
             
         # else:
         #     rospy.loginfo("Target person not found in the image")
